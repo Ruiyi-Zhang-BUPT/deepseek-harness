@@ -17,7 +17,8 @@ class FakeChild extends EventEmitter {
   targetStdin = new PassThrough()
   targetStdout = new PassThrough()
   targetStderr = new PassThrough()
-  stdio = [null, null, null, null, this.targetStdin, this.targetStdout, this.targetStderr]
+  runnerStderr = new PassThrough()
+  stdio = [null, null, this.runnerStderr, null, this.targetStdin, this.targetStdout, this.targetStderr]
   sent: unknown[] = []
   killed: NodeJS.Signals[] = []
   sendError: Error | undefined
@@ -159,7 +160,11 @@ describe('Windows parent runner contract', () => {
     child.emit('disconnect')
     child.emit('exit', 0, null)
     expect(await direct).toBeInstanceOf(Error)
-    expect(await range).toBeInstanceOf(Error)
+    expect(await range).toMatchObject({
+      name: 'SubprocessError',
+      code: 'SUBPROCESS_RUNNER_FAILED',
+      message: 'subprocess-local: Windows Job runner exited with exit code 0 before proving its managed range empty',
+    })
   })
 
   it('keeps the requested control endpoint separate from runner IPC and ordinary output', () => {
@@ -171,7 +176,7 @@ describe('Windows parent runner contract', () => {
     expect(result.control).toBe(control)
     expect(child.sent).toEqual([{ type: 'start', cwd: 'C:\\target', env: { TARGET: 'yes' }, control: 'pipe' }])
     expect(spawn).toHaveBeenCalledWith('C:\\node.exe', expect.any(Array), expect.objectContaining({
-      stdio: ['ignore', 'ignore', 'ignore', 'ipc', 'pipe', 'pipe', 2, 'overlapped'],
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc', 'pipe', 'pipe', 2, 'overlapped'],
     }))
     control.destroy()
   })
@@ -183,7 +188,7 @@ describe('Windows parent runner contract', () => {
     ], expect.objectContaining({
       cwd: process.cwd(),
       windowsHide: true,
-      stdio: ['ignore', 'ignore', 'ignore', 'ipc', 'pipe', 'pipe', 2],
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc', 'pipe', 'pipe', 2],
     }))
     expect(child.sent).toEqual([{ type: 'start', cwd: 'C:\\target', env: { TARGET: 'yes' } }])
     expect(result.stdin).toBe(child.targetStdin)
@@ -199,7 +204,7 @@ describe('Windows parent runner contract', () => {
     } as const
     const { result, spawn } = launch(child, ignored)
     expect(spawn).toHaveBeenCalledWith('C:\\node.exe', expect.any(Array), expect.objectContaining({
-      stdio: ['ignore', 'ignore', 'ignore', 'ipc', expect.any(Number), 'pipe', 2],
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc', expect.any(Number), 'pipe', 2],
     }))
     const options = spawn.mock.calls[0]?.[2] as { stdio: unknown[] }
     const carrier = options.stdio[4]
@@ -353,6 +358,53 @@ describe('Windows parent runner contract', () => {
     await expect(statusless.result.direct).rejects.toMatchObject({ name: 'SubprocessError', code: 'SUBPROCESS_RUNNER_FAILED' })
   })
 
+  it('reports the abnormal runner exit status in decimal and hex with its stderr tail', async () => {
+    const { child, result } = launch()
+    const direct = result.direct.catch((error: unknown) => error)
+    const range = result.owner.waitForExit().catch((error: unknown) => error)
+    child.runnerStderr.emit('data', Buffer.from('Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)\n'))
+    child.runnerStderr.emit('data', Buffer.from('src\\win\\async.c:76\n'))
+    child.connected = false
+    child.exit(3221226505, null)
+    const runnerFailure = {
+      name: 'SubprocessError',
+      code: 'SUBPROCESS_RUNNER_FAILED',
+      message: 'subprocess-local: Windows Job runner exited with exit code 3221226505 (0xC0000409) '
+        + 'before proving its managed range empty; runner stderr: '
+        + 'Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)\nsrc\\win\\async.c:76',
+    }
+    await expect(direct).resolves.toMatchObject(runnerFailure)
+    await expect(range).resolves.toMatchObject(runnerFailure)
+  })
+
+  it('retains only the last 4 KiB of the abnormal runner stderr', async () => {
+    const { child, result } = launch()
+    const range = result.owner.waitForExit().catch((error: unknown) => error)
+    result.direct.catch(() => {})
+    child.runnerStderr.emit('data', Buffer.from('a'.repeat(4000)))
+    child.runnerStderr.emit('data', Buffer.from('b'.repeat(500)))
+    child.connected = false
+    child.exit(1073807364, null)
+    const failure = await range
+    expect(failure).toBeInstanceOf(Error)
+    if (!(failure instanceof Error)) throw new Error('expected runner failure')
+    expect(failure.message).toContain('exited with exit code 1073807364 (0x40010004) before proving its managed range empty')
+    const tail = failure.message.slice(failure.message.indexOf('; runner stderr: ') + '; runner stderr: '.length)
+    expect(tail).toHaveLength(4096)
+    expect(tail.startsWith('a'.repeat(3596))).toBe(true)
+    expect(tail.endsWith('b'.repeat(500))).toBe(true)
+  })
+
+  it('keeps clean range settlement unchanged when the runner wrote stderr', async () => {
+    const { child, result } = launch()
+    child.runnerStderr.emit('data', Buffer.from('benign runner notice\n'))
+    child.emit('message', { type: 'target-exit', exitCode: 7 })
+    await expect(result.direct).resolves.toEqual({ exitCode: 7, signal: null })
+    child.connected = false
+    child.exit(0, null)
+    await expect(result.owner.waitForExit()).resolves.toBeUndefined()
+  })
+
   it('fails closed on malformed/duplicate result, runner spawn error, and start-send error', async () => {
     const malformed = launch()
     malformed.child.emit('message', { type: 'target-exit', exitCode: -1 })
@@ -377,8 +429,15 @@ describe('Windows parent runner contract', () => {
 
     const postSpawnError = launch()
     const infrastructureError = new Error('runner failed after spawn')
+    postSpawnError.child.runnerStderr.emit('data', Buffer.from('out of memory\n'))
     postSpawnError.child.emit('error', infrastructureError)
-    const runnerFailure = { name: 'SubprocessError', code: 'SUBPROCESS_RUNNER_FAILED', cause: infrastructureError }
+    const runnerFailure = {
+      name: 'SubprocessError',
+      code: 'SUBPROCESS_RUNNER_FAILED',
+      cause: infrastructureError,
+      message: 'subprocess-local: Windows Job runner failed after it started: Error: runner failed after spawn; '
+        + 'runner stderr: out of memory',
+    }
     await expect(postSpawnError.result.direct).rejects.toMatchObject(runnerFailure)
     await expect(postSpawnError.result.owner.waitForExit()).rejects.toMatchObject(runnerFailure)
 

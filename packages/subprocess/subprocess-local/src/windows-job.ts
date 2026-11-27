@@ -27,6 +27,54 @@ import {
 } from './runner-launch.ts'
 import type { RunnerInvocation } from './runner-launch.ts'
 
+/** Maximum bytes of the private runner's own standard error retained for an abnormal-exit diagnostic. */
+const RUNNER_STDERR_TAIL_BYTES = 4096
+
+/**
+ * Keep the last {@link RUNNER_STDERR_TAIL_BYTES} bytes of the private runner's standard error.
+ * @param tail - bytes retained so far.
+ * @param chunk - newly read bytes.
+ * @returns the retained tail after appending `chunk`.
+ */
+function appendRunnerStderrTail(tail: Buffer, chunk: Buffer): Buffer {
+  const combined = Buffer.concat([tail, chunk])
+  return combined.length <= RUNNER_STDERR_TAIL_BYTES
+    ? combined
+    : combined.subarray(combined.length - RUNNER_STDERR_TAIL_BYTES)
+}
+
+/**
+ * Decode a retained runner standard-error tail, dropping a leading partial character and surrounding whitespace.
+ * @param tail - retained runner standard-error bytes.
+ * @returns UTF-8 text for the failure detail.
+ */
+function runnerStderrText(tail: Buffer): string {
+  return tail.toString('utf8').replace(/^\uFFFD+/u, '').trim()
+}
+
+/**
+ * Format the private runner's exit status, adding the unsigned 32-bit hex form of a nonzero exit code.
+ * @param exitCode - runner exit code, or null when it reported no status.
+ * @param signal - signal that terminated the runner, or null when it exited by status.
+ * @returns a status phrase for the failure detail.
+ */
+function runnerExitStatus(exitCode: number | null, signal: NodeJS.Signals | null): string {
+  if (signal !== null) return `signal ${signal}`
+  if (exitCode === null) return 'without an exit status'
+  if (exitCode === 0) return 'exit code 0'
+  return `exit code ${String(exitCode)} (0x${(exitCode >>> 0).toString(16).toUpperCase()})`
+}
+
+/**
+ * Append a nonempty runner standard-error tail to a private-runner failure detail.
+ * @param detail - failure detail naming the runner failure.
+ * @param stderrTail - retained runner standard error.
+ * @returns the detail, with `; runner stderr: <tail>` appended when the tail is nonempty.
+ */
+function withRunnerStderr(detail: string, stderrTail: string): string {
+  return stderrTail === '' ? detail : `${detail}; runner stderr: ${stderrTail}`
+}
+
 /** Classify a failure on the private runner channel, keeping an already coded failure. */
 function runnerIpcFailure(error: unknown): SubprocessError {
   if (error instanceof SubprocessError) return error
@@ -157,6 +205,14 @@ export function launchWindowsJob(
     if (ignoredStdinFd !== undefined) closeSync(ignoredStdinFd)
   }
   const targetStdin = child.stdio[4] as Writable | null
+  const runnerStderr = child.stdio[2] as Readable | null
+  let stderrTail = Buffer.alloc(0)
+  /* v8 ignore next -- the Windows runner stdio always pipes fd 2; the guard contains only a custom spawn seam. */
+  if (runnerStderr !== null) {
+    runnerStderr.on('data', (chunk: Buffer) => {
+      stderrTail = appendRunnerStderrTail(stderrTail, chunk)
+    })
+  }
 
   const direct = Promise.withResolvers<SubprocessOutcome>()
   const rangeExit = Promise.withResolvers<void>()
@@ -179,11 +235,12 @@ export function launchWindowsJob(
       // The private IPC result may arrive after the process-exit notification.
       if (!ipcDisconnected) return
     }
-    const status = signal !== null
-      ? `signal ${signal}`
-      : exitCode === null ? 'without an exit status' : `exit code ${String(exitCode)}`
+    const status = runnerExitStatus(exitCode, signal)
     failInfrastructure(new SubprocessError(
-      `subprocess-local: Windows Job runner exited with ${status} before proving its managed range empty`,
+      withRunnerStderr(
+        `subprocess-local: Windows Job runner exited with ${status} before proving its managed range empty`,
+        runnerStderrText(stderrTail),
+      ),
       'SUBPROCESS_RUNNER_FAILED',
     ))
   }
@@ -244,7 +301,10 @@ export function launchWindowsJob(
       return
     }
     failInfrastructure(new SubprocessError(
-      `subprocess-local: Windows Job runner failed after it started: ${String(error)}`,
+      withRunnerStderr(
+        `subprocess-local: Windows Job runner failed after it started: ${String(error)}`,
+        runnerStderrText(stderrTail),
+      ),
       'SUBPROCESS_RUNNER_FAILED',
       { cause: error },
     ))
