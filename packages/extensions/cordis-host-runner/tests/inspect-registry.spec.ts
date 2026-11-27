@@ -355,12 +355,13 @@ describe('Encoded object input', () => {
     expect(received).toEqual(['{"service":"tools"}'])
   })
 
-  it.each([
+  const invalidEncodedInputs: [string, string][] = [
     ['not JSON', 'not json'],
     ['a JSON array', '[]'],
     ['JSON null', 'null'],
     ['a JSON primitive', '"text"'],
-  ])('rejects %s with the unchanged INSPECT_INVALID_INPUT error', async (_label, input) => {
+  ]
+  it.each(invalidEncodedInputs)('rejects %s with the unchanged INSPECT_INVALID_INPUT error', async (_label, input) => {
     const received: (JsonValue | undefined)[] = []
     disposers.push(registry.register({
       manifest,

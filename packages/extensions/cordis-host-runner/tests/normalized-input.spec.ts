@@ -3,21 +3,21 @@ import { describe, expect, it } from 'vitest'
 import { normalizeEncodedInput } from '../src/normalized-input.ts'
 
 const objectRoot = { type: 'object' }
+const nonObjectRoots: ({ type?: string } | undefined)[] = [{ type: 'string' }, {}, undefined]
+const nonObjectJson = ['not json', '[]', 'null', '"text"', '5']
 
 describe('normalizeEncodedInput', () => {
   it('decodes a JSON-encoded object for an object-root schema', () => {
     expect(normalizeEncodedInput(objectRoot, '{"service":"tools"}')).toEqual({ service: 'tools' })
   })
 
-  it.each([
-    ['a non-object root schema', { type: 'string' }],
-    ['an untyped root schema', {}],
-    ['an absent root schema', undefined],
-  ])('leaves a string unchanged for %s', (_label, inputSchema) => {
-    expect(normalizeEncodedInput(inputSchema, '{"service":"tools"}')).toBe('{"service":"tools"}')
+  it('leaves a string unchanged for a non-object root schema', () => {
+    for (const inputSchema of nonObjectRoots) {
+      expect(normalizeEncodedInput(inputSchema, '{"service":"tools"}')).toBe('{"service":"tools"}')
+    }
   })
 
-  it.each(['not json', '[]', 'null', '"text"', '5'])('leaves non-object JSON %s unchanged', (input) => {
+  it.each(nonObjectJson)('leaves non-object JSON %s unchanged', (input) => {
     expect(normalizeEncodedInput(objectRoot, input)).toBe(input)
   })
 
