@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-api-gateway'
 import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
+import { normalizeEncodedInput } from './normalized-input.ts'
 import type {
   CordisInspectMethodManifest, CordisInspectPlatform, CordisInspectProviderManifest,
   CordisInspectProviderView, CordisInspectQueryRequest, CordisInspectQueryResolution,
@@ -171,7 +172,7 @@ export class CordisInspectRegistryService extends Service {
         throw new InspectError(`Host Cordis inspect provider "${providerId}" is not registered`, 'INSPECT_PROVIDER_NOT_FOUND')
       }
       const method = findMethod(registration.manifest, methodName)
-      const normalizedInput = normalizeEncodedInput(method, input)
+      const normalizedInput = decodeInspectInput(method, input)
       validateInput('Host', providerId, method, normalizedInput)
       signal.throwIfAborted()
       let data: JsonValue
@@ -235,7 +236,7 @@ export class CordisInspectRegistryService extends Service {
       throw new InspectError(`Client Cordis inspect provider "${providerId}" is not registered`, 'INSPECT_PROVIDER_NOT_FOUND')
     }
     const method = findMethod(provider, methodName)
-    const normalizedInput = normalizeEncodedInput(method, input)
+    const normalizedInput = decodeInspectInput(method, input)
     validateInput('Client', providerId, method, normalizedInput)
     signal.throwIfAborted()
     const gateway = this.ctx.get('typertGateway')
@@ -339,21 +340,14 @@ function findMethod(manifest: CordisInspectProviderManifest, name: string): Cord
 }
 
 /**
- * Decode the JSON-encoded object a model can pass for an object-rooted method input.
+ * Decode a model-emitted encoded object for one method while preserving this module's JSON type.
  * @param method - method whose root input schema gates decoding.
- * @param input - model-supplied input, possibly a JSON-encoded object string.
+ * @param input - optional lossless JSON input.
  * @returns the decoded object, or the original input when it is not an encoded object; validation reports the original value.
  */
-function normalizeEncodedInput(method: CordisInspectMethodManifest, input: JsonValue | undefined): JsonValue | undefined {
-  if (typeof input !== 'string' || (method.inputSchema as JsonSchemaNode).type !== 'object') return input
-  let decoded: JsonValue
-  try {
-    decoded = JSON.parse(input) as JsonValue
-  } catch {
-    // Not JSON: validation still rejects the original string against the object schema.
-    return input
-  }
-  return typeof decoded === 'object' && decoded !== null && !Array.isArray(decoded) ? decoded : input
+function decodeInspectInput(method: CordisInspectMethodManifest, input: JsonValue | undefined): JsonValue | undefined {
+  const schema = method.inputSchema as JsonSchemaNode
+  return normalizeEncodedInput(schema.type === 'object' ? { type: 'object' } : undefined, input) as JsonValue | undefined
 }
 
 function validateInput(
