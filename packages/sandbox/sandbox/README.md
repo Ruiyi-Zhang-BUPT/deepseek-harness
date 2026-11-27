@@ -67,7 +67,7 @@ When a confined call is denied, the operation reports a denial marker naming the
 
 ### Fail-closed behavior
 
-When no backend can enforce the requested mode, the call fails with `SANDBOX_UNAVAILABLE` rather than running unconfined; the error text names the missing platform runner. A backend that fails after starting also reports a structured runner-failure signature, so a broken sandbox is distinguishable from a command failure. A provider that cannot prepare host state for an enforceable mode, such as a Windows ACL grant or private temp directory, rejects with `SandboxPreparationError`: `SANDBOX_PREPARATION_FAILED` carries the platform error as `cause`, and `SANDBOX_INVALID_TEMP_ROOT` reports a host temp root inside the workspace.
+When no backend can enforce the requested mode, the call fails with `SANDBOX_UNAVAILABLE` rather than running unconfined; the error text names the missing platform runner. A backend that fails after starting also reports a structured runner-failure signature, so a broken sandbox is distinguishable from a command failure. A provider that cannot prepare host state for an enforceable mode, such as a Windows ACL grant or private temp directory, rejects with `SandboxPreparationError`: `SANDBOX_PREPARATION_FAILED` carries the platform error as `cause`, `SANDBOX_INVALID_TEMP_ROOT` reports a host temp root inside the workspace, and `SANDBOX_UNSUPPORTED_ROOT` reports a policy root the backend cannot govern, such as a WSL UNC workspace on the Windows ACL backend.
 
 -----
 

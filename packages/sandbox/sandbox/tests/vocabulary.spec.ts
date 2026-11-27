@@ -41,6 +41,6 @@ describe('SandboxPreparationError', () => {
     const error = new SandboxPreparationError('cannot grant the workspace', 'SANDBOX_PREPARATION_FAILED', { cause })
     expect(error).toBeInstanceOf(HarnessError)
     expect(error).toMatchObject({ name: 'SandboxPreparationError', code: 'SANDBOX_PREPARATION_FAILED', cause })
-    expect(SANDBOX_PREPARATION_ERROR_CODES).toEqual(['SANDBOX_PREPARATION_FAILED', 'SANDBOX_INVALID_TEMP_ROOT'])
+    expect(SANDBOX_PREPARATION_ERROR_CODES).toEqual(['SANDBOX_PREPARATION_FAILED', 'SANDBOX_INVALID_TEMP_ROOT', 'SANDBOX_UNSUPPORTED_ROOT'])
   })
 })

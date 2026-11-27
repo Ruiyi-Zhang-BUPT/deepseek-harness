@@ -166,8 +166,11 @@ export class SandboxUnavailableError extends HarnessError {
  *   Windows ACL grant or a private temp directory; `cause` holds the platform failure.
  * - `SANDBOX_INVALID_TEMP_ROOT` — the host temp root lies inside the workspace, so a private temp directory would
  *   inherit the workspace grant; move the temp root or the workspace.
+ * - `SANDBOX_UNSUPPORTED_ROOT` — the requested workspace root cannot carry the backend's confinement state, such as a
+ *   WSL UNC workspace on the Windows ACL backend, whose namespace implements no Windows security descriptors; use a
+ *   root the backend can govern.
  */
-export const SANDBOX_PREPARATION_ERROR_CODES = ['SANDBOX_PREPARATION_FAILED', 'SANDBOX_INVALID_TEMP_ROOT'] as const
+export const SANDBOX_PREPARATION_ERROR_CODES = ['SANDBOX_PREPARATION_FAILED', 'SANDBOX_INVALID_TEMP_ROOT', 'SANDBOX_UNSUPPORTED_ROOT'] as const
 
 /** One code from {@link SANDBOX_PREPARATION_ERROR_CODES}. */
 export type SandboxPreparationErrorCode = typeof SANDBOX_PREPARATION_ERROR_CODES[number]

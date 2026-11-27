@@ -1,11 +1,11 @@
-/** Canonical path-overlap checks that keep workspace and temp capabilities separate. */
+/** Canonical path-overlap checks that keep workspace and temp capabilities separate, and WSL UNC namespace detection. */
 
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { assertPrivateTempDisjoint, assertTempRootOutsideWorkspace } from '../src/path-boundary.ts'
+import { assertPrivateTempDisjoint, assertTempRootOutsideWorkspace, isWslUncPath } from '../src/path-boundary.ts'
 
 describe('Windows ACL temp path boundary', () => {
   const scratchDirs: string[] = []
@@ -61,5 +61,35 @@ describe('Windows ACL temp path boundary', () => {
     expect(() => {
       assertPrivateTempDisjoint([workspace], siblingTemp)
     }).not.toThrow()
+  })
+})
+
+describe('WSL UNC namespace detection', () => {
+  it.each([
+    '\\\\wsl.localhost\\ubuntu-noble\\root',
+    '\\\\WSL.LOCALHOST\\Ubuntu\\root',
+    '\\\\wsl$\\ubuntu\\root',
+    '\\\\WSL$\\kali-linux-current\\root\\dsh.CTF',
+    '//wsl.localhost/ubuntu-noble/root',
+    '//wsl$/ubuntu/root',
+    '\\\\?\\UNC\\wsl.localhost\\ubuntu\\root',
+    '\\\\?\\UNC\\wsl$\\ubuntu\\root',
+    '\\\\wsl.localhost\\',
+  ])('matches the WSL namespace spelling %s', (path) => {
+    expect(isWslUncPath(path)).toBe(true)
+  })
+
+  it.each([
+    'C:\\Users\\Administrator\\workspace',
+    '\\\\fileserver\\share\\project',
+    '\\\\?\\C:\\Users\\Administrator',
+    '//fileserver/share/project',
+    '/home/user/project',
+    'wsl.localhost\\root',
+    'C:\\temp\\\\wsl.localhost\\root',
+    '\\\\wsl.localhost.other\\root',
+    '\\\\wsl$other\\root',
+  ])('rejects the non-WSL path %s', (path) => {
+    expect(isWslUncPath(path)).toBe(false)
   })
 })

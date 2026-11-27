@@ -37,7 +37,7 @@ import z from '@deepseek-ai/schemastery'
 import { SandboxPreparationError, SandboxProvider, SandboxUnavailableError, canonicalPath } from '@deepseek-ai/dsh-sandbox'
 import type { ConfinedArgv, ConfinedSandboxMode, RunnerFailureRule, SandboxEnforcement, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { AclWriteGrant, isTempRootInsideWorkspace, registerAclDiagnosisSkill, tempWriteSid, workspaceWriteSid } from '@deepseek-ai/dsh-sandbox-windows-acl'
+import { AclWriteGrant, isTempRootInsideWorkspace, isWslUncPath, registerAclDiagnosisSkill, tempWriteSid, workspaceWriteSid } from '@deepseek-ai/dsh-sandbox-windows-acl'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from './profiles.ts'
 
@@ -415,8 +415,11 @@ export class LocalSandboxProvider extends SandboxProvider {
    * SID to enter it. A fresh provider always chooses a new path; crash
    * residue therefore cannot collide with or authorize a resumed session.
    * Fail-closed: a half-materialized temp grant is revoked and its directory
-   * removed before the error propagates. A temp root inside the workspace
-   * throws `SandboxPreparationError` `SANDBOX_INVALID_TEMP_ROOT` before any ACL
+   * removed before the error propagates. A WSL UNC workspace root or host temp
+   * directory throws `SandboxPreparationError` `SANDBOX_UNSUPPORTED_ROOT` before
+   * any ACL read, because that namespace implements no Windows security
+   * descriptors. A temp root inside the workspace throws
+   * `SandboxPreparationError` `SANDBOX_INVALID_TEMP_ROOT` before any ACL
    * change; any other failure throws `SANDBOX_PREPARATION_FAILED` with the
    * platform error as `cause`.
    * @param sessionId - the policy's calling-session identity.
@@ -424,6 +427,18 @@ export class LocalSandboxProvider extends SandboxProvider {
    * @returns the pair's private temp directory and write capability.
    */
   private materializeAclGrant(sessionId: SessionId, workspaceRoot: string): AclTempCapability {
+    const wslUncScope = isWslUncPath(workspaceRoot)
+      ? { what: 'workspace root', path: workspaceRoot, remedy: 'open a local Windows folder as the workspace' }
+      : isWslUncPath(tmpdir())
+        ? { what: 'host temp directory', path: tmpdir(), remedy: 'set TEMP and TMP to a local Windows directory' }
+        : undefined
+    if (wslUncScope !== undefined) {
+      throw new SandboxPreparationError(
+        `sandbox-local: windows-acl cannot govern the ${wslUncScope.what} (${wslUncScope.path}): Windows security descriptors are unsupported on WSL UNC paths (\\\\wsl.localhost, \\\\wsl$), so no ACL grant can be materialized there and the command did not run. `
+        + `To run confined, ${wslUncScope.remedy}; otherwise run with danger-full-access or keep the file tools and avoid confined shell commands.`,
+        'SANDBOX_UNSUPPORTED_ROOT',
+      )
+    }
     let tempInsideWorkspace: boolean
     try {
       tempInsideWorkspace = isTempRootInsideWorkspace(workspaceRoot, tmpdir())

@@ -67,7 +67,7 @@ kind: "package-reference"
 
 ### 故障关闭行为
 
-没有后端能强制执行所请求的模式时，调用以 `SANDBOX_UNAVAILABLE` 失败，而不是不受限制地运行；错误文本会指明缺失的平台 runner。启动后失败的后端还会报告结构化的 runner 失败签名，因此损坏的沙箱可以与命令失败区分开。提供方无法为可强制执行的模式准备主机状态（例如 Windows ACL 授权或私有临时目录）时，以 `SandboxPreparationError` 拒绝：`SANDBOX_PREPARATION_FAILED` 以平台错误作为 `cause`，`SANDBOX_INVALID_TEMP_ROOT` 表示主机临时根目录位于工作区内。
+没有后端能强制执行所请求的模式时，调用以 `SANDBOX_UNAVAILABLE` 失败，而不是不受限制地运行；错误文本会指明缺失的平台 runner。启动后失败的后端还会报告结构化的 runner 失败签名，因此损坏的沙箱可以与命令失败区分开。提供方无法为可强制执行的模式准备主机状态（例如 Windows ACL 授权或私有临时目录）时，以 `SandboxPreparationError` 拒绝：`SANDBOX_PREPARATION_FAILED` 以平台错误作为 `cause`，`SANDBOX_INVALID_TEMP_ROOT` 表示主机临时根目录位于工作区内，`SANDBOX_UNSUPPORTED_ROOT` 表示后端无法管辖的策略根目录，例如 Windows ACL 后端上的 WSL UNC 工作区。
 
 -----
 

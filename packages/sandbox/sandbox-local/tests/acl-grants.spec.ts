@@ -26,7 +26,10 @@ const mockState = vi.hoisted(() => ({
   disposeFailure: undefined as Error | undefined,
 }))
 
-vi.mock('@deepseek-ai/dsh-sandbox-windows-acl', () => {
+vi.mock('@deepseek-ai/dsh-sandbox-windows-acl', async () => {
+  // The Windows ACL package is Win32-only at runtime; its WSL UNC predicate is
+  // pure string matching, so the real detector still classifies test paths.
+  const { isWslUncPath } = await import('../../sandbox-windows-acl/src/path-boundary.ts')
   class MockAclWriteGrant {
     readonly writeSid: string
     readonly added: Array<{ path: string; standing: boolean }> = []
@@ -60,6 +63,7 @@ vi.mock('@deepseek-ai/dsh-sandbox-windows-acl', () => {
       const temp = realpathSync.native(tempRoot)
       return temp === workspace || temp.startsWith(`${workspace}${process.platform === 'win32' ? '\\' : '/'}`)
     },
+    isWslUncPath,
     workspaceWriteSid: () => 'S-1-4-42-42',
     tempWriteSid: (path: string) => `TEMP:${path}`,
   }
@@ -334,6 +338,42 @@ describe('windows-acl write grants (LocalSandboxProvider)', () => {
       message: expect.stringMatching(/temp root must be outside the workspace/u) as string,
     })
     expect(mockState.grants).toHaveLength(0)
+  })
+
+  it('rejects a WSL UNC workspace root with SANDBOX_UNSUPPORTED_ROOT before creating any grant', async () => {
+    const { sandbox } = await setup()
+    await expect(sandbox.confine(['true'], {
+      mode: 'workspace-write',
+      workspaceRoot: '\\\\wsl.localhost\\ubuntu-noble\\root',
+      sessionId: brandString<SessionId>('wsl-unc-workspace'),
+    })).rejects.toMatchObject({
+      name: 'SandboxPreparationError',
+      code: 'SANDBOX_UNSUPPORTED_ROOT',
+      message: expect.stringMatching(/workspace root.*WSL UNC.*danger-full-access/u) as string,
+    })
+    expect(mockState.grants).toHaveLength(0)
+  })
+
+  it('rejects a WSL UNC host temp root with SANDBOX_UNSUPPORTED_ROOT before creating any grant', async () => {
+    const { sandbox } = await setup()
+    const ws = workspaceRoot()
+    scratch.push(ws)
+    const previous = process.env.TMPDIR
+    process.env.TMPDIR = '//wsl.localhost/ubuntu-noble/tmp'
+    try {
+      await expect(sandbox.confine(['true'], {
+        mode: 'workspace-write', workspaceRoot: ws, sessionId: brandString<SessionId>('wsl-unc-temp'),
+      })).rejects.toMatchObject({
+        name: 'SandboxPreparationError',
+        code: 'SANDBOX_UNSUPPORTED_ROOT',
+        message: expect.stringMatching(/host temp directory.*TEMP and TMP/u) as string,
+      })
+      expect(mockState.grants).toHaveLength(0)
+    } finally {
+      if (previous === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = previous
+      cleanup()
+    }
   })
 
   it('temp grant creation/add failures remove the random directory; cleanup failures aggregate', async () => {

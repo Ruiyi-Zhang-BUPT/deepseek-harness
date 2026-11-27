@@ -1,11 +1,36 @@
 /**
  * Canonical directory-boundary checks for the Windows ACL workspace and
- * private-temp capabilities.
+ * private-temp capabilities, plus the WSL UNC namespace predicate.
  * @module @deepseek-ai/dsh-sandbox-windows-acl/path-boundary
  */
 
 import { realpathSync } from 'node:fs'
 import { isAbsolute, relative, sep } from 'node:path'
+
+/** WSL's Windows-side UNC namespace roots, as their leading path text. */
+const WSL_UNC_ROOTS = [
+  '\\\\wsl.localhost\\',
+  '\\\\wsl$\\',
+  '//wsl.localhost/',
+  '//wsl$/',
+  '\\\\?\\UNC\\wsl.localhost\\',
+  '\\\\?\\UNC\\wsl$\\',
+] as const
+
+/**
+ * Whether `path` starts at a WSL UNC namespace root (`\\wsl.localhost\…`,
+ * `\\wsl$\…`, their forward-slash spellings, or an extended-length
+ * `\\?\UNC\` spelling). WSL serves that namespace from its Windows-side
+ * redirector, which implements no Windows security descriptors, so no ACL
+ * grant can be read or written there. Other UNC shares, such as SMB, are not
+ * matched.
+ * @param path - the path to classify, in any casing.
+ * @returns whether the path names content inside a WSL UNC namespace.
+ */
+export function isWslUncPath(path: string): boolean {
+  const normalized = path.toLowerCase()
+  return WSL_UNC_ROOTS.some(root => normalized.startsWith(root))
+}
 
 /** Whether `root` is the same canonical directory as `candidate` or contains it. */
 function containsDirectory(root: string, candidate: string): boolean {
