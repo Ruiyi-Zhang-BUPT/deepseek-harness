@@ -7,14 +7,14 @@
 import { realpathSync } from 'node:fs'
 import { isAbsolute, relative, sep } from 'node:path'
 
-/** WSL's Windows-side UNC namespace roots, as their leading path text. */
+/** WSL's Windows-side UNC namespace roots, as their leading path text (lowercase: compared against a lowercased path). */
 const WSL_UNC_ROOTS = [
   '\\\\wsl.localhost\\',
   '\\\\wsl$\\',
   '//wsl.localhost/',
   '//wsl$/',
-  '\\\\?\\UNC\\wsl.localhost\\',
-  '\\\\?\\UNC\\wsl$\\',
+  '\\\\?\\unc\\wsl.localhost\\',
+  '\\\\?\\unc\\wsl$\\',
 ] as const
 
 /**
