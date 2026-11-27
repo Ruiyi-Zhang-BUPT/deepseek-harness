@@ -4,6 +4,7 @@ import TypertGateway from '@deepseek-ai/dsh-api-gateway'
 import RemoteAccessService from '@deepseek-ai/dsh-api-remote-access'
 import type { PeerId, PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DynamicCordisRunnerService from '../src/index.ts'
 import { CordisInspectRegistryService, InspectError } from '../src/inspect-registry.ts'
@@ -61,11 +62,11 @@ afterEach(async () => {
   }
 })
 
-function start() {
+function start(input: JsonValue = { service: 'remote' }) {
   const controller = new AbortController()
   controllers.push(controller)
   let settled = false
-  const result = registry.query('client', 'Service', 'listService', { service: 'remote' }, AGENT_A, controller.signal).then(
+  const result = registry.query('client', 'Service', 'listService', input, AGENT_A, controller.signal).then(
     (value) => { settled = true; return { value } },
     (error: unknown) => {
       settled = true
@@ -311,6 +312,71 @@ describe('Inspect query failure codes', () => {
     await expect(registry.query('host', 'Service', 'listService', {}, AGENT_A, controller.signal)).rejects.toMatchObject({
       name: 'InspectError', code: 'INSPECT_FAILED', cause: late,
     })
+  })
+})
+
+describe('Encoded object input', () => {
+  const signal = new AbortController().signal
+  const stringRootManifest: CordisInspectProviderManifest = {
+    id: 'Event',
+    description: 'Test string-input provider.',
+    methods: [{
+      name: 'listEvents',
+      description: 'Inspect one event.',
+      inputSchema: { type: 'string' },
+      outputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+    }],
+  }
+
+  it('decodes a JSON-encoded object before Host dispatch and Client wire dispatch', async () => {
+    const received: (JsonValue | undefined)[] = []
+    disposers.push(registry.register({
+      manifest,
+      query: async (_method, input) => { received.push(input); return { name: 'local' } },
+    }))
+    await expect(registry.query('host', 'Service', 'listService', '{"service":"tools"}', AGENT_A, signal))
+      .resolves.toEqual({ name: 'local' })
+    expect(received).toEqual([{ service: 'tools' }])
+
+    const query = start('{"service":"remote"}')
+    expect(requests.at(-1)!.input).toEqual({ service: 'remote' })
+    expect(answer(query)).toEqual({ accepted: true })
+    await expect(query.result).resolves.toEqual({ value: { name: 'theme' } })
+  })
+
+  it('leaves a raw string unchanged for a method with a non-object root schema', async () => {
+    const received: (JsonValue | undefined)[] = []
+    disposers.push(registry.register({
+      manifest: stringRootManifest,
+      query: async (_method, input) => { received.push(input); return { name: 'local' } },
+    }))
+    await expect(registry.query('host', 'Event', 'listEvents', '{"service":"tools"}', AGENT_A, signal))
+      .resolves.toEqual({ name: 'local' })
+    expect(received).toEqual(['{"service":"tools"}'])
+  })
+
+  it.each([
+    ['not JSON', 'not json'],
+    ['a JSON array', '[]'],
+    ['JSON null', 'null'],
+    ['a JSON primitive', '"text"'],
+  ])('rejects %s with the unchanged INSPECT_INVALID_INPUT error', async (_label, input) => {
+    const received: (JsonValue | undefined)[] = []
+    disposers.push(registry.register({
+      manifest,
+      query: async (_method, value) => { received.push(value); return { name: 'local' } },
+    }))
+    await expect(registry.query('host', 'Service', 'listService', input, AGENT_A, signal)).rejects.toMatchObject({
+      name: 'InspectError',
+      code: 'INSPECT_INVALID_INPUT',
+      message: 'Host Cordis inspect Service.listService rejected input: "input" must be an object',
+    })
+    await expect(registry.query('client', 'Service', 'listService', input, AGENT_A, signal)).rejects.toMatchObject({
+      name: 'InspectError',
+      code: 'INSPECT_INVALID_INPUT',
+      message: 'Client Cordis inspect Service.listService rejected input: "input" must be an object',
+    })
+    expect(received).toEqual([])
   })
 })
 

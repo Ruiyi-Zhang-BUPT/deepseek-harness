@@ -148,7 +148,7 @@ export class CordisInspectRegistryService extends Service {
    * @param platform - Host or Client runtime.
    * @param providerId - provider selected from {@link list}.
    * @param methodName - declared method name.
-   * @param input - optional lossless JSON input.
+   * @param input - optional lossless JSON input; an object-rooted method also accepts its JSON-encoded object string.
    * @param agent - requesting Agent and scope.
    * @param signal - tool-call cancellation.
    * @returns provider JSON data; Client queries fail fast when Gateway has no live Client
@@ -171,11 +171,12 @@ export class CordisInspectRegistryService extends Service {
         throw new InspectError(`Host Cordis inspect provider "${providerId}" is not registered`, 'INSPECT_PROVIDER_NOT_FOUND')
       }
       const method = findMethod(registration.manifest, methodName)
-      validateInput('Host', providerId, method, input)
+      const normalizedInput = normalizeEncodedInput(method, input)
+      validateInput('Host', providerId, method, normalizedInput)
       signal.throwIfAborted()
       let data: JsonValue
       try {
-        data = await registration.query(methodName, input, { agent, signal })
+        data = await registration.query(methodName, normalizedInput, { agent, signal })
       } catch (error) {
         // The cancellation itself passes through for the tool registry to classify as ABORTED.
         if (error instanceof HarnessError || isCancellation(error, signal)) throw error
@@ -234,7 +235,8 @@ export class CordisInspectRegistryService extends Service {
       throw new InspectError(`Client Cordis inspect provider "${providerId}" is not registered`, 'INSPECT_PROVIDER_NOT_FOUND')
     }
     const method = findMethod(provider, methodName)
-    validateInput('Client', providerId, method, input)
+    const normalizedInput = normalizeEncodedInput(method, input)
+    validateInput('Client', providerId, method, normalizedInput)
     signal.throwIfAborted()
     const gateway = this.ctx.get('typertGateway')
     if (gateway !== undefined && !gateway.hasLiveClient()) {
@@ -249,7 +251,7 @@ export class CordisInspectRegistryService extends Service {
       agentId: agent.id,
       provider: providerId,
       method: methodName,
-      ...input === undefined ? {} : { input },
+      ...normalizedInput === undefined ? {} : { input: normalizedInput },
     }
     const result = new Promise<CordisInspectQueryResolution>((resolve) => {
       this.pending.set(requestId, {
@@ -334,6 +336,24 @@ function findMethod(manifest: CordisInspectProviderManifest, name: string): Cord
   const method = manifest.methods.find(candidate => candidate.name === name)
   if (method === undefined) throw new InspectError(`Cordis inspect provider "${manifest.id}" has no method "${name}"`, 'INSPECT_METHOD_NOT_FOUND')
   return method
+}
+
+/**
+ * Decode the JSON-encoded object a model can pass for an object-rooted method input.
+ * @param method - method whose root input schema gates decoding.
+ * @param input - model-supplied input, possibly a JSON-encoded object string.
+ * @returns the decoded object, or the original input when it is not an encoded object; validation reports the original value.
+ */
+function normalizeEncodedInput(method: CordisInspectMethodManifest, input: JsonValue | undefined): JsonValue | undefined {
+  if (typeof input !== 'string' || (method.inputSchema as JsonSchemaNode).type !== 'object') return input
+  let decoded: JsonValue
+  try {
+    decoded = JSON.parse(input) as JsonValue
+  } catch {
+    // Not JSON: validation still rejects the original string against the object schema.
+    return input
+  }
+  return typeof decoded === 'object' && decoded !== null && !Array.isArray(decoded) ? decoded : input
 }
 
 function validateInput(

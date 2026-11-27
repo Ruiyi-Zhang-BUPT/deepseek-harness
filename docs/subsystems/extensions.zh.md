@@ -43,7 +43,7 @@ list(): CordisInspectProviderView[]
  * @param platform - Host or Client runtime.
  * @param providerId - provider selected from {@link list}.
  * @param methodName - declared method name.
- * @param input - optional lossless JSON input.
+ * @param input - optional lossless JSON input; an object-rooted method also accepts its JSON-encoded object string.
  * @param agent - requesting Agent and scope.
  * @param signal - tool-call cancellation.
  * @returns provider JSON data; Client queries fail fast when Gateway has no live Client
