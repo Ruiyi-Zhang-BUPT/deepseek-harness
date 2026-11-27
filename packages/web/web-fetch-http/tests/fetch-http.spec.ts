@@ -12,6 +12,7 @@ import {
   isSameOrigin,
   parseCharset,
   parseFetchUrl,
+  unsupportedContentTypeMessage,
   validateFetchUrl,
   WEB_FETCH_MAX_URL_LENGTH,
 } from '../src/policy.ts'
@@ -70,6 +71,36 @@ describe('policy helpers', () => {
     expect(classifyContentType(null)).toBeUndefined()
   })
 
+  it('classifies script media types as text', () => {
+    expect(classifyContentType('application/javascript')).toBe('text')
+    expect(classifyContentType('application/ecmascript; charset=utf-8')).toBe('text')
+    expect(classifyContentType('text/javascript')).toBe('text')
+  })
+
+  it.each([
+    'application/pdf',
+    'application/pdf; qs=0.001',
+    'application/octet-stream',
+    'application/msword',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  ])('names the document alternative for the unsupported media type %s', (header) => {
+    expect(unsupportedContentTypeMessage(header)).toBe(
+      `unsupported content type "${header.split(';')[0]}": only text-like bodies decode; `
+      + 'to read this file, save the response body (for example with a shell download) and open it with the document tools, '
+      + 'or fetch a text or HTML version',
+    )
+  })
+
+  it('names the text alternative for other unsupported types and an absent header', () => {
+    expect(unsupportedContentTypeMessage('image/png')).toBe(
+      'unsupported content type "image/png": only text-like bodies decode; fetch a text or HTML version instead',
+    )
+    expect(unsupportedContentTypeMessage(null)).toBe(
+      'unsupported content type "unknown": only text-like bodies decode; fetch a text or HTML version instead',
+    )
+  })
+
   it('compares origins', () => {
     expect(isSameOrigin(new URL('https://a.com/x'), new URL('https://a.com/y'))).toBe(true)
     expect(isSameOrigin(new URL('https://a.com'), new URL('https://b.com'))).toBe(false)
@@ -120,6 +151,12 @@ describe('HttpFetchProvider success', () => {
     expect(result.body).toEqual({ kind: 'html', content: '<h1>hi</h1>' })
   })
 
+  it('fetches a script body as text', async () => {
+    handler = (_req, res) => { res.writeHead(200, { 'content-type': 'application/javascript' }); res.end('export const answer = 42') }
+    const result = await provider().fetch({ url: base })
+    expect(result.body).toEqual({ kind: 'text', content: 'export const answer = 42' })
+  })
+
   it('sends the configured user agent', async () => {
     let seen: string | undefined
     handler = (req, res) => { seen = req.headers['user-agent']; res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok') }
@@ -163,16 +200,30 @@ describe('HttpFetchProvider caps', () => {
     expect(result.truncated).toBe(true)
   })
 
-  it('rejects an unsupported content type', async () => {
+  it('rejects an unsupported content type with the text-only contract', async () => {
     handler = (_req, res) => { res.writeHead(200, { 'content-type': 'image/png' }); res.end('binary') }
-    await expect(provider().fetch({ url: base }))
-      .rejects.toThrow(expect.objectContaining({ code: 'WEB_UNSUPPORTED_CONTENT_TYPE' }))
+    await expect(provider().fetch({ url: base })).rejects.toThrow(expect.objectContaining({
+      code: 'WEB_UNSUPPORTED_CONTENT_TYPE',
+      message: 'unsupported content type "image/png": only text-like bodies decode; fetch a text or HTML version instead',
+    }))
   })
 
-  it('rejects a response with no content type at all', async () => {
+  it('names the parsed media type and the document alternative for a PDF response', async () => {
+    handler = (_req, res) => { res.writeHead(200, { 'content-type': 'application/pdf; qs=0.001' }); res.end('%PDF-1.7') }
+    await expect(provider().fetch({ url: base })).rejects.toThrow(expect.objectContaining({
+      code: 'WEB_UNSUPPORTED_CONTENT_TYPE',
+      message: 'unsupported content type "application/pdf": only text-like bodies decode; '
+        + 'to read this file, save the response body (for example with a shell download) and open it with the document tools, '
+        + 'or fetch a text or HTML version',
+    }))
+  })
+
+  it('rejects a response with no content type at all using the unknown label', async () => {
     handler = (_req, res) => { res.writeHead(200); res.end('no type') }
-    await expect(provider().fetch({ url: base }))
-      .rejects.toThrow(expect.objectContaining({ code: 'WEB_UNSUPPORTED_CONTENT_TYPE' }))
+    await expect(provider().fetch({ url: base })).rejects.toThrow(expect.objectContaining({
+      code: 'WEB_UNSUPPORTED_CONTENT_TYPE',
+      message: 'unsupported content type "unknown": only text-like bodies decode; fetch a text or HTML version instead',
+    }))
   })
 
   it('accepts a declared content-length within the cap', async () => {

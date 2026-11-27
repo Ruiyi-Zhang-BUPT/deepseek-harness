@@ -66,21 +66,66 @@ export function isSameOrigin(a: URL, b: URL): boolean {
   return a.protocol === b.protocol && a.hostname === b.hostname && a.port === b.port
 }
 
+/** Script media types that carry decodable source text but do not start with `text/`. */
+const SCRIPT_TEXT_MEDIA_TYPES = new Set(['application/javascript', 'application/ecmascript'])
+
+/** Media types whose bytes are a document binary the document tools open once saved. */
+const DOCUMENT_MEDIA_TYPES = new Set(['application/pdf', 'application/octet-stream', 'application/msword'])
+
+/**
+ * Parse the media type from a raw `Content-Type` header: lower-cased and
+ * without parameters. An absent header yields an empty string.
+ *
+ * @param contentType - the raw `Content-Type` header, or `null` when absent.
+ * @returns the media type alone.
+ */
+function parseMediaType(contentType: string | null): string {
+  return (contentType ?? '').replace(/;.*$/s, '').trim().toLowerCase()
+}
+
 /**
  * Classify a response `Content-Type` into a decodable body kind, or `undefined`
  * for an unsupported (e.g. binary) type. `text/html` and `application/xhtml+xml`
- * are `html`; other `text/*` plus a few structured text types are `text`.
+ * are `html`; other `text/*`, the script media types `application/javascript`
+ * and `application/ecmascript`, plus a few structured text types are `text`.
  *
  * @param contentType - the raw `Content-Type` header, or `null` when the
  *   response carries none (unsupported).
  * @returns the decodable kind, or `undefined` for an unsupported type.
  */
 export function classifyContentType(contentType: string | null): FetchableKind | undefined {
-  const mime = (contentType ?? '').replace(/;.*$/s, '').trim().toLowerCase()
+  const mime = parseMediaType(contentType)
   if (mime === 'text/html' || mime === 'application/xhtml+xml') return 'html'
   if (mime.startsWith('text/')) return 'text'
+  if (SCRIPT_TEXT_MEDIA_TYPES.has(mime)) return 'text'
   if (mime === 'application/json' || mime === 'application/xml' || mime.endsWith('+json') || mime.endsWith('+xml')) return 'text'
   return undefined
+}
+
+/** Whether a media type is a document binary the document tools can open after it is saved. */
+function isDocumentMediaType(mime: string): boolean {
+  return DOCUMENT_MEDIA_TYPES.has(mime)
+    || mime.startsWith('application/vnd.ms-')
+    || mime.startsWith('application/vnd.openxmlformats-officedocument.')
+}
+
+/**
+ * Build the model-visible rejection for a response body this provider cannot
+ * decode. It names the parsed media type (header parameters dropped), states
+ * that only text-like bodies decode, and for document binaries names how to
+ * read the file instead: save the response body and open it with the document
+ * tools, or fetch a text or HTML version.
+ *
+ * @param contentType - the raw `Content-Type` header, or `null` when absent.
+ * @returns the `WEB_UNSUPPORTED_CONTENT_TYPE` message.
+ */
+export function unsupportedContentTypeMessage(contentType: string | null): string {
+  const mime = parseMediaType(contentType)
+  const received = mime === '' ? 'unknown' : mime
+  const recovery = isDocumentMediaType(mime)
+    ? 'to read this file, save the response body (for example with a shell download) and open it with the document tools, or fetch a text or HTML version'
+    : 'fetch a text or HTML version instead'
+  return `unsupported content type "${received}": only text-like bodies decode; ${recovery}`
 }
 
 /**
