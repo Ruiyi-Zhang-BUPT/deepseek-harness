@@ -18,6 +18,9 @@ import LlmRuntime, {
   type ToolCallId,
   type ContentBlock,
   type GenerateOptions,
+  type LlmCallConfig,
+  type LlmResolvedModelInfo,
+  type ReasoningEffortId,
   type StreamChunk,
   type ToolSchema,
 } from '@deepseek-ai/dsh-llm'
@@ -75,8 +78,22 @@ type ReviewScript = readonly StreamChunk[] | ((options: GenerateOptions) => Asyn
 class RecordingAdapter extends LlmAdapter {
   readonly requests: GenerateOptions[] = []
 
-  constructor(private readonly script: ReviewScript[]) {
+  constructor(
+    private readonly script: ReviewScript[],
+    private readonly reasoningEfforts?: readonly ReasoningEffortId[],
+  ) {
     super()
+  }
+
+  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      ...this.reasoningEfforts === undefined ? {} : {
+        reasoning: { efforts: this.reasoningEfforts.map(id => ({ id, name: id })) },
+      },
+    })
   }
 
   async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -133,11 +150,12 @@ function reasoningDecisionChunks(text: string): StreamChunk[] {
 async function harness(
   script: ReviewScript[],
   permissionConfig: NonNullable<Parameters<typeof PermissionPresetService.Config>[0]> = { presets: PRESETS, defaultPreset: 'workspace-write' },
+  reasoningEfforts?: readonly ReasoningEffortId[],
 ): Promise<{ ctx: Context; adapter: RecordingAdapter; auto: PluginFiber }> {
   const ctx = new Context()
   provideWorkingDirectoryFixture(ctx)
   contexts.push(ctx)
-  const adapter = new RecordingAdapter(script)
+  const adapter = new RecordingAdapter(script, reasoningEfforts)
   let auto: PluginFiber | undefined
   // Keep review dependencies alive through the drain. Shutdown tests own concurrent Session cleanup.
   await ctx.effect(async function* () {
@@ -181,7 +199,7 @@ function autoSession(ctx: Context, id: string, cwd = '/workspace'): { session: S
 function appendHeader(
   session: Session,
   tools?: readonly ToolSchema[],
-  config: { provider: string; model: string } = { provider: 'review', model: 'same-model' },
+  config: LlmCallConfig = { provider: 'review', model: 'same-model' },
 ): void {
   session.append('request/header', {
     header: { config, ...tools === undefined ? {} : { tools: [...tools] } },
@@ -1166,6 +1184,72 @@ describe('native review request', () => {
       error: { message: 'Auto review of tool "probe" failed; its body was not executed: middleware refused' },
     })
     expect(probe.runs()).toBe(0)
+  })
+})
+
+describe('reviewer reasoning control', () => {
+  const schema: ToolSchema = { name: 'probe', description: 'probe', parameters: { type: 'object' } }
+
+  async function reviewedCall(
+    ctx: Context,
+    session: Session,
+    agent: Agent,
+    id: string,
+  ): Promise<Awaited<ReturnType<typeof executeToolFixture>>> {
+    const callId = brandString<ToolCallId>(`${id}-call`)
+    appendAssistant(session, [{ type: 'tool-call', id: callId, name: 'probe', arguments: '{}' }])
+    appendNativeCall(session, callId, 'probe', '{}')
+    return executeToolFixture(ctx, {
+      signal: new AbortController().signal, callId, name: 'probe', arguments: {}, agent,
+    })
+  }
+
+  it('repeats the reasoning effort of the latest session request header', async () => {
+    const { ctx, adapter } = await harness(
+      [decisionChunks('{"risk":"low","decision":"allow"}')],
+      undefined,
+      [brandString<ReasoningEffortId>('low'), brandString<ReasoningEffortId>('max')],
+    )
+    const probe = registerProbe(ctx)
+    const { session, agent } = autoSession(ctx, 'reviewer-inherits-effort')
+    appendHeader(session, [schema], {
+      provider: 'review', model: 'same-model', reasoningEffort: brandString<ReasoningEffortId>('low'),
+    })
+    appendHeader(session, [schema], {
+      provider: 'review', model: 'same-model', reasoningEffort: brandString<ReasoningEffortId>('max'),
+    })
+
+    const result = await reviewedCall(ctx, session, agent, 'inherits-effort')
+
+    expect(result.isError).toBe(false)
+    expect(probe.runs()).toBe(1)
+    expect(adapter.requests).toHaveLength(1)
+    expect(adapter.requests[0]).toMatchObject({
+      provider: 'review',
+      model: 'same-model',
+      reasoningEffort: 'max',
+    })
+  })
+
+  it.each([
+    { id: 'reasoning-support', efforts: [brandString<ReasoningEffortId>('low'), brandString<ReasoningEffortId>('max')] },
+    { id: 'no-reasoning-support', efforts: undefined },
+  ])('omits reasoning effort when the session header records none ($id)', async ({ id, efforts }) => {
+    const { ctx, adapter } = await harness(
+      [decisionChunks('{"risk":"low","decision":"allow"}')],
+      undefined,
+      efforts,
+    )
+    const probe = registerProbe(ctx)
+    const { session, agent } = autoSession(ctx, `reviewer-header-effort-${id}`)
+    appendHeader(session, [schema])
+
+    const result = await reviewedCall(ctx, session, agent, `header-effort-${id}`)
+
+    expect(result.isError).toBe(false)
+    expect(probe.runs()).toBe(1)
+    expect(adapter.requests).toHaveLength(1)
+    expect(adapter.requests[0]).not.toHaveProperty('reasoningEffort')
   })
 })
 

@@ -102,7 +102,7 @@ Unloading closes selection and review admission. If the application root remains
 
 #### What the model sees
 
-The reviewer uses the latest `request/header.config` provider and model with the shipped adapter's default reasoning. Its fixed `REVIEW_POLICY` replaces human approval for exactly one action: allow executes immediately with Full access. The user messages contain only the retained facts described above. It returns one strict JSON text object with `risk` and `decision`; deny may include a string `reason`. Reasoning blocks may precede that single text block. Only `low + allow`, `medium + allow/deny`, and `high + deny` are valid.
+The reviewer uses the latest `request/header.config` provider, model, and `reasoningEffort`, so it reasons at the same effort as the reviewed request; when the header records no effort, the shipped adapter's default applies. Its fixed `REVIEW_POLICY` replaces human approval for exactly one action: allow executes immediately with Full access. The user messages contain only the retained facts described above. It returns one strict JSON text object with `risk` and `decision`; deny may include a string `reason`. Reasoning blocks may precede that single text block. Only `low + allow`, `medium + allow/deny`, and `high + deny` are valid.
 
 #### Token effect
 
